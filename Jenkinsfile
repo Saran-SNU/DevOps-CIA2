@@ -149,6 +149,36 @@ pipeline {
                 }
             }
         }
+
+        stage('Deploy to EC2') {
+            steps {
+                echo 'Deploying Docker container to EC2 instance...'
+                sshagent(['EC2-SSH']) {
+                    sh '''
+                        EC2_IP="43.204.102.198"
+                        APP_NAME="devops-cia2-app"
+                        IMAGE="${ECR_REGISTRY}/${ECR_REPOSITORY}:${IMAGE_TAG}"
+                        
+                        echo "Connecting to EC2 instance..."
+                        
+                        ssh -o StrictHostKeyChecking=no ubuntu@$EC2_IP << EOF
+                            echo "Pulling latest image from ECR..."
+                            aws ecr get-login-password --region ${AWS_DEFAULT_REGION} | docker login --username AWS --password-stdin ${ECR_REGISTRY}
+                            docker pull $IMAGE
+                            
+                            echo "Stopping and removing old container..."
+                            docker stop $APP_NAME || true
+                            docker rm $APP_NAME || true
+                            
+                            echo "Running new container on port 5000..."
+                            docker run -d --name $APP_NAME -p 5000:5000 $IMAGE
+                        EOF
+                        
+                        echo "✅ Deployment complete! Access app at http://$EC2_IP:5000"
+                    '''
+                }
+            }
+        }
     }
 
     post {
