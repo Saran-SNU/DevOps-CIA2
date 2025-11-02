@@ -183,7 +183,7 @@ pipeline {
 
     post {
         success {
-            echo '✅ Pipeline succeeded! Deployment successful.'
+            echo '✅ Pipeline success! Deployment successful.'
         }
         failure {
             echo '❌ Pipeline failed! Please check the Jenkins logs.'
