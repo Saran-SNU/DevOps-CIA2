@@ -2,8 +2,8 @@ pipeline {
     agent any
     
     environment {
-        AWS_DEFAULT_REGION = 'us-east-1'  // Change to your AWS region
-        ECR_REGISTRY = 'YOUR_ACCOUNT_ID.dkr.ecr.us-east-1.amazonaws.com'  // Update with your ECR registry
+        AWS_DEFAULT_REGION = 'ap-south-1'  // Change to your AWS region
+        ECR_REGISTRY = '315838644546.dkr.ecr.ap-south-1.amazonaws.com/devops-cia2-app'  // Update with your ECR registry
         ECR_REPOSITORY = 'devops-cia2-app'  // Update with your ECR repository name
         ECS_CLUSTER = 'devops-cia2-cluster'  // Update with your ECS cluster name
         ECS_SERVICE = 'devops-cia2-service'  // Update with your ECS service name
