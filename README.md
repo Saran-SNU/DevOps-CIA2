@@ -33,7 +33,7 @@ GitHub → Jenkins → Docker → AWS ECR → AWS ECS → Public Access
 - AWS CLI configured or AWS credentials stored in Jenkins
 
 ### AWS Account
-- ECR repository created
+- ECR repository create
 - ECS cluster and service configured
 - IAM permissions for ECR push and ECS deployment
 
