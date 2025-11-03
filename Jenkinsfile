@@ -89,7 +89,7 @@ pipeline {
                     sh '''
                         # Safety check: Verify cluster exists
                         CLUSTER_STATUS=$(aws ecs describe-clusters --clusters ${ECS_CLUSTER} --query 'clusters[0].status' --output text)
-                        if [ -z "$CLUSTER_STATUS" ] || [ "$CLUSTER_STATUS" == "None" ]; then
+                        if [ -z "$CLUSTER_STATUS" ] || [ "$CLUSTER_STATUS" = "None" ]; then
                             echo "❌ Error: ECS cluster '${ECS_CLUSTER}' does not exist or is not accessible."
                             exit 1
                         fi
@@ -97,7 +97,7 @@ pipeline {
                         
                         # Safety check: Verify service exists
                         SERVICE_STATUS=$(aws ecs describe-services --cluster ${ECS_CLUSTER} --services ${ECS_SERVICE} --query 'services[0].status' --output text)
-                        if [ -z "$SERVICE_STATUS" ] || [ "$SERVICE_STATUS" == "None" ]; then
+                        if [ -z "$SERVICE_STATUS" ] || [ "$SERVICE_STATUS" = "None" ]; then
                             echo "❌ Error: ECS service '${ECS_SERVICE}' does not exist in cluster '${ECS_CLUSTER}'."
                             exit 1
                         fi
@@ -106,7 +106,7 @@ pipeline {
                         # Get current task definition
                         TASK_DEFINITION=$(aws ecs describe-services --cluster ${ECS_CLUSTER} --services ${ECS_SERVICE} --query 'services[0].taskDefinition' --output text)
                         
-                        if [ -z "$TASK_DEFINITION" ] || [ "$TASK_DEFINITION" == "None" ]; then
+                        if [ -z "$TASK_DEFINITION" ] || [ "$TASK_DEFINITION" = "None" ]; then
                             echo "❌ Error: Could not retrieve task definition. Check if service exists."
                             exit 1
                         fi
@@ -116,12 +116,8 @@ pipeline {
                         # Get task definition JSON
                         aws ecs describe-task-definition --task-definition $TASK_DEFINITION --query 'taskDefinition' > task-definition.json
                         
-                        # Update image in task definition (handle both Linux and macOS sed)
-                        if [[ "$OSTYPE" == "darwin"* ]]; then
-                            sed -i '' "s|\"image\": \".*\"|\"image\": \"${ECR_REGISTRY}/${ECR_REPOSITORY}:${IMAGE_TAG}\"|g" task-definition.json
-                        else
-                            sed -i.bak "s|\"image\": \".*\"|\"image\": \"${ECR_REGISTRY}/${ECR_REPOSITORY}:${IMAGE_TAG}\"|g" task-definition.json
-                        fi
+                        # Update image in task definition (use portable sed syntax)
+                        sed -i.bak "s|\"image\": \".*\"|\"image\": \"${ECR_REGISTRY}/${ECR_REPOSITORY}:${IMAGE_TAG}\"|g" task-definition.json || sed -i '' "s|\"image\": \".*\"|\"image\": \"${ECR_REGISTRY}/${ECR_REPOSITORY}:${IMAGE_TAG}\"|g" task-definition.json
                         
                         # Clean up task definition JSON (remove read-only fields)
                         jq 'del(.taskDefinitionArn, .revision, .status, .requiresAttributes, .placementConstraints, .compatibilities, .registeredAt, .registeredBy)' task-definition.json > new-task-definition.json
@@ -129,7 +125,7 @@ pipeline {
                         # Register new task definition
                         NEW_TASK_DEF=$(aws ecs register-task-definition --cli-input-json file://new-task-definition.json --query 'taskDefinition.taskDefinitionArn' --output text)
                         
-                        if [ -z "$NEW_TASK_DEF" ] || [ "$NEW_TASK_DEF" == "None" ]; then
+                        if [ -z "$NEW_TASK_DEF" ] || [ "$NEW_TASK_DEF" = "None" ]; then
                             echo "❌ Error: Failed to register new task definition"
                             exit 1
                         fi
@@ -153,29 +149,40 @@ pipeline {
         stage('Deploy to EC2') {
             steps {
                 echo 'Deploying Docker container to EC2 instance...'
-                sshagent(['EC2-SSH']) {
-                    sh '''
-                        EC2_IP="43.204.102.198"
-                        APP_NAME="devops-cia2-app"
-                        IMAGE="${ECR_REGISTRY}/${ECR_REPOSITORY}:${IMAGE_TAG}"
-                        
-                        echo "Connecting to EC2 instance..."
-                        
-                        ssh -o StrictHostKeyChecking=no ubuntu@$EC2_IP << EOF
-                            echo "Pulling latest image from ECR..."
-                            aws ecr get-login-password --region ${AWS_DEFAULT_REGION} | docker login --username AWS --password-stdin ${ECR_REGISTRY}
-                            docker pull $IMAGE
-                            
-                            echo "Stopping and removing old container..."
-                            docker stop $APP_NAME || true
-                            docker rm $APP_NAME || true
-                            
-                            echo "Running new container on port 5000..."
-                            docker run -d --name $APP_NAME -p 5000:5000 $IMAGE
-                        EOF
-                        
-                        echo "✅ Deployment complete! Access app at http://$EC2_IP:5000"
-                    '''
+                script {
+                    try {
+                        withCredentials([sshUserPrivateKey(credentialsId: 'EC2-SSH', keyFileVariable: 'SSH_KEY', usernameVariable: 'SSH_USER')]) {
+                            sh """
+                                EC2_IP="13.203.196.0"
+                                APP_NAME="devops-cia2-app"
+                                IMAGE="${ECR_REGISTRY}/${ECR_REPOSITORY}:${IMAGE_TAG}"
+                                ECR_REG="${ECR_REGISTRY}"
+                                ECR_REPO="${ECR_REPOSITORY}"
+                                AWS_REG="${AWS_DEFAULT_REGION}"
+                                SSH_USER_VAR="\${SSH_USER:-ubuntu}"
+                                
+                                echo "Connecting to EC2 instance..."
+                                
+                                ssh -i "\${SSH_KEY}" -o StrictHostKeyChecking=no "\${SSH_USER_VAR}@\${EC2_IP}" bash -s << 'REMOTE_SCRIPT'
+                                    echo "Pulling latest image from ECR..."
+                                    aws ecr get-login-password --region ${AWS_DEFAULT_REGION} | docker login --username AWS --password-stdin ${ECR_REGISTRY}
+                                    docker pull ${ECR_REGISTRY}/${ECR_REPOSITORY}:${IMAGE_TAG}
+                                    
+                                    echo "Stopping and removing old container..."
+                                    docker stop devops-cia2-app || true
+                                    docker rm devops-cia2-app || true
+                                    
+                                    echo "Running new container on port 5000..."
+                                    docker run -d --name devops-cia2-app -p 5000:5000 ${ECR_REGISTRY}/${ECR_REPOSITORY}:${IMAGE_TAG}
+                                REMOTE_SCRIPT
+                                
+                                echo "✅ Deployment complete! Access app at http://\${EC2_IP}:5000"
+                            """
+                        }
+                    } catch (Exception e) {
+                        echo "⚠️ Warning: EC2 deployment skipped - SSH credentials not configured or EC2-SSH credential not found."
+                        echo "⚠️ To enable EC2 deployment, configure 'EC2-SSH' credential in Jenkins."
+                    }
                 }
             }
         }
